@@ -54,18 +54,38 @@
 } while (0)
 
 #define BUFF 512
+#define MAX_BLOCK_IDX 0x3fffffff
+#define MAX_VAR_ID 0x3ffff
+#define BLOCK_META_LENGTH 48
+#define BLOCK_IDX_OFFSET 18 
 
 // TYPES
+
+typedef struct blockMetaInfo_t
+{
+    unsigned int varId : 18;
+    unsigned int blockId : 30;
+} blockMetaInfo_t;
+
+typedef struct MSTRM
+{
+    bool allocated;
+    void* basePtr;
+    void* pos;
+    size_t length;
+} MSTRM;
 
 typedef struct confInfo 
 {
     unsigned int digestWidth;
     unsigned char* (*hashFunc)( const unsigned char *data, unsigned long nBytes, unsigned char *hash );
+    unsigned int dcpStackSize;
+    unsigned long dcpBlockSize;
 } confInfo;
 
 typedef struct dcpInfo
 {
-    int nbFiles;    
+    int dcpCounter;    
 } dcpInfo;
 
 typedef struct execInfo
@@ -89,6 +109,7 @@ typedef struct dataInfo
     size_t hashDataSize;
     void *ptr;
     unsigned char *hashArray;
+    unsigned char *hashArrayTmp;
 } dataInfo;
 
 typedef struct profInfo
@@ -104,4 +125,8 @@ char* hashHex( const unsigned char* hash, int digestWidth, char* hashHexStr );
 unsigned char* CRC32( const unsigned char *d, unsigned long nBytes, unsigned char *hash );
 int registerEnvironment( confInfo * Conf, execInfo * Exec );
 void printConfiguration( confInfo Conf, execInfo Exec );
-unsigned long timestamp(); 
+unsigned long timestamp();
+MSTRM* mcreate( void** ptr, size_t size );
+size_t madd( void* ptr, size_t size, size_t nmemb, MSTRM* mstream );
+void* mseek( MSTRM* mstream, size_t offset );
+int mdestroy( MSTRM* mstream );
