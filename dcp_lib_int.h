@@ -63,8 +63,8 @@
 
 typedef struct blockMetaInfo_t
 {
-    unsigned int varId : 18;
-    unsigned int blockId : 30;
+    unsigned long varId : 18;
+    unsigned long blockId : 30;
 } blockMetaInfo_t;
 
 typedef struct MSTRM
@@ -85,7 +85,8 @@ typedef struct confInfo
 
 typedef struct dcpInfo
 {
-    int dcpCounter;    
+    int dcpCounter;
+    size_t dcpFileSize;
 } dcpInfo;
 
 typedef struct execInfo
@@ -105,6 +106,7 @@ typedef struct dataInfo
 {
     int id;
     size_t elemSize;
+    size_t size;
     size_t nElem;
     size_t hashDataSize;
     void *ptr;

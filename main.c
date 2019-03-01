@@ -20,8 +20,13 @@ int main() {
     }
 
     protect( 0, data, 512, sizeof(int) );
-    protect( 1, data2, 8192, sizeof(int) );
-    checkpoint( 0 );
+    protect( 1, data2, 10000, sizeof(int) );
+    checkpoint( 0 ); 
+    checkpoint( 1 );
+    checkpoint( 2 );
+    checkpoint( 3 );
+    checkpoint( 4 );
+    checkpoint( 5 );
     
     data[0] = 2;
     
@@ -29,14 +34,9 @@ int main() {
         if(i>4096)
         data2[i] = i+2;
     }
-    
-    checkpoint( 1 );
-    checkpoint( 2 );
-    checkpoint( 3 );
-    checkpoint( 4 );
-    checkpoint( 5 );
     checkpoint( 6 );
 
+    recover();
     MPI_Finalize();
 
     exit(EXIT_SUCCESS);

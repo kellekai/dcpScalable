@@ -8,3 +8,4 @@
 int init( MPI_Comm comm );
 int protect( int id, void* ptr, size_t nElem, size_t elemSize );
 int checkpoint( int id );
+int recover();
