@@ -55,7 +55,7 @@ int init( MPI_Comm comm )
 
     // set dcp stack size to 5
     Conf.dcpStackSize = 5;
-    Conf.dcpBlockSize = 128;
+    Conf.dcpBlockSize = 16384;
 
     if( Exec.commRank == 0 ) {
         printConfiguration( Conf, Exec );
@@ -78,7 +78,7 @@ int protect( int id, void* ptr, size_t nElem, size_t elemSize )
     int i;
     for( i=0; i<Exec.nbVar; i++) {
         if( id == Data[i].id ) {
-            DBG_MSG( Exec.comm, "variable id '%d' will be updated.", Exec.commRank, id );
+            //DBG_MSG( Exec.comm, "variable id '%d' will be updated.", Exec.commRank, id );
             update = true;
         }
     }
@@ -100,6 +100,9 @@ int protect( int id, void* ptr, size_t nElem, size_t elemSize )
 
 int checkpoint( int id )
 {
+    MPI_Barrier(Exec.comm);
+    double t1 = MPI_Wtime();
+    
     if( id < 0 ) {
         ERR_MSG( Exec.comm, "invalid ID '%d'. ID's have to be positive.", Exec.commRank, id );
         return NSCS;
@@ -137,7 +140,7 @@ int checkpoint( int id )
     size_t dcpSize = 0;
     unsigned long glbDataSize = 0;
     if( dcpLayer == 0 ) Exec.dcp.dcpFileSize = 0;
-
+    
     for(; i<Exec.nbVar; i++) {
          
         unsigned int varId = Data[i].id;
@@ -182,6 +185,7 @@ int checkpoint( int id )
         
         while( pos < dataSize ) {
             
+            unsigned long dcpOld = Exec.dcp.dcpFileSize;
             // hash index
             unsigned int blockId = pos/Conf.dcpBlockSize;
             unsigned int hashIdx = blockId*Conf.digestWidth;
@@ -197,22 +201,20 @@ int checkpoint( int id )
                 memset( block, 0x0, Conf.dcpBlockSize );
                 memcpy( block, ptr, chunkSize );
                 Conf.hashFunc( block, Conf.dcpBlockSize, &Data[i].hashArrayTmp[hashIdx] );
-                // we write plain data for dcpLayer = 0
-                if( dcpLayer > 0 ) {
-                    ptr = block;
-                    chunkSize = Conf.dcpBlockSize;
-                }
+                ptr = block;
+                chunkSize = Conf.dcpBlockSize;
+                //DBG_MSG(Exec.comm, "yepp",0);
             } else {
                 Conf.hashFunc( ptr, Conf.dcpBlockSize, &Data[i].hashArrayTmp[hashIdx] );
                 char hashstring[Conf.digestWidth*2+1];
-                //if(i==1)DBG_MSG(Exec.comm, "ptr: %p, hash: %s", 0, ptr, hashHex(&Data[i].hashArrayTmp[hashIdx], Conf.digestWidth, hashstring));
+                //if(i==1)//DBG_MSG(Exec.comm, "ptr: %p, hash: %s", 0, ptr, hashHex(&Data[i].hashArrayTmp[hashIdx], Conf.digestWidth, hashstring));
             }
             
             bool commitBlock;
             // if old hash exists, compare. If datasize increased, there wont be an old hash to compare with.
             if( pos < Data[i].hashDataSize ) {
                 commitBlock = memcmp( &Data[i].hashArray[hashIdx], &Data[i].hashArrayTmp[hashIdx], Conf.digestWidth );
-                //if(i==1) DBG_MSG(Exec.comm, "hash compare, commitBlock:%d, Data[%d]:%d", 0, commitBlock, intIdx, ((int*)Data[i].ptr)[intIdx] );
+                //if(i==1) //DBG_MSG(Exec.comm, "hash compare, commitBlock:%d, Data[%d]:%d", 0, commitBlock, intIdx, ((int*)Data[i].ptr)[intIdx] );
             } else {
                 commitBlock = true;
             }
@@ -230,6 +232,7 @@ int checkpoint( int id )
                 }
                 dcpSize += success*chunkSize;
                 Exec.dcp.dcpFileSize += success*fileUpdate;
+                //DBG_MSG(Exec.comm, "dcpFileSize (delta: %lu): %lu", 0, Exec.dcp.dcpFileSize-dcpOld, Exec.dcp.dcpFileSize );
             }
             
             pos += chunkSize*success;
@@ -245,7 +248,8 @@ int checkpoint( int id )
     }
 
     free(block);
-        
+
+    fsync(fileno(fd));
     fclose( fd );
     Exec.dcp.dcpCounter++;
     if( (dcpLayer == (Conf.dcpStackSize-1)) ) {
@@ -264,6 +268,8 @@ int checkpoint( int id )
             perror(errstr); 
         }
     }
+    MPI_Barrier(Exec.comm);
+    double t2 = MPI_Wtime();
    
     // create meta data
     // - file size
@@ -287,8 +293,9 @@ int checkpoint( int id )
 
     rename( mfnt, mfn );
 
+    MPI_Barrier(Exec.comm);
     if(Exec.commRank==0)
-        printf("[INFO] Checkpoint (id:%d) succeeded (written %8lu of %8lu | file size:%8lu)\n", id, dcpSize, glbDataSize, Exec.dcp.dcpFileSize);
+        printf("[INFO] Checkpoint (id:%d) succeeded (written %8lu of %8lu | file size:%8lu | time: %lf seconds.)\n", id, dcpSize, glbDataSize, Exec.dcp.dcpFileSize, t2-t1);
 
 }
 
@@ -317,17 +324,17 @@ int recover()
             ERR_MSG( Exec.comm, "id '%d' does not exist!", Exec.commRank, varId );
             return NSCS;
         }
-        DBG_MSG(MPI_COMM_WORLD, "varId: %d, Data[%d].id:%d"  ,0, varId, idx, Data[idx].id );
+        //DBG_MSG(MPI_COMM_WORLD, "varId: %d, Data[%d].id:%d"  ,0, varId, idx, Data[idx].id );
         fread( &Data[idx].size, sizeof(unsigned long), 1, mfd );
-        DBG_MSG(MPI_COMM_WORLD, "Data[%d].size:%lu"  ,0, idx, Data[i].size );
+        //DBG_MSG(MPI_COMM_WORLD, "Data[%d].size:%lu"  ,0, idx, Data[i].size );
     }
     fclose(mfd);
     
-    DBG_MSG(MPI_COMM_WORLD, "Exec.dcp.dcpFileSize:%lu"  ,0, Exec.dcp.dcpFileSize );
-    DBG_MSG(MPI_COMM_WORLD, "glbDataSize:%lu"           ,0, glbDataSize );
-    DBG_MSG(MPI_COMM_WORLD, "dcpFileId:%d"             ,0, dcpFileId );
-    DBG_MSG(MPI_COMM_WORLD, "dcpBlockSizeStored:%lu"    ,0, dcpBlockSizeStored );
-    DBG_MSG(MPI_COMM_WORLD, "Exec.nbVar:%d"            ,0, Exec.nbVar );
+    //DBG_MSG(MPI_COMM_WORLD, "Exec.dcp.dcpFileSize:%lu"  ,0, Exec.dcp.dcpFileSize );
+    //DBG_MSG(MPI_COMM_WORLD, "glbDataSize:%lu"           ,0, glbDataSize );
+    //DBG_MSG(MPI_COMM_WORLD, "dcpFileId:%d"             ,0, dcpFileId );
+    //DBG_MSG(MPI_COMM_WORLD, "dcpBlockSizeStored:%lu"    ,0, dcpBlockSizeStored );
+    //DBG_MSG(MPI_COMM_WORLD, "Exec.nbVar:%d"            ,0, Exec.nbVar );
 
     snprintf( fn, BUFF, "%s/dcp-id%d-rank%d.fti", Exec.id, dcpFileId, Exec.commRank );
    
@@ -344,6 +351,12 @@ int recover()
             return NSCS;
         }
         fread( Data[idx].ptr, locDataSize, 1, fd );
+        int overflow;
+        if( (overflow=locDataSize%dcpBlockSizeStored) != 0 ) {
+            void *buffer = (void*) malloc( dcpBlockSizeStored - overflow ); 
+            fread( buffer, dcpBlockSizeStored - overflow, 1, fd );
+            free(buffer);
+        }
     }
     
     unsigned long pos = ftell( fd );
@@ -353,12 +366,12 @@ int recover()
     blockMetaInfo_t blockMeta;
     unsigned char *block = (unsigned char*) malloc( dcpBlockSizeStored );
 
-    DBG_MSG(Exec.comm,"pos:%lu",0,pos);
+    //DBG_MSG(Exec.comm,"pos:%lu",0,pos);
     unsigned long check = pos;
     unsigned long check_exp = pos;
     while( pos < Exec.dcp.dcpFileSize ) {
         
-        DBG_MSG(Exec.comm,"pos:%lu, check:%lu, exp: %lu",0,pos, check, check_exp);
+        //DBG_MSG(Exec.comm,"pos:%lu, check:%lu, exp: %lu",0,pos, check, check_exp);
         check += dcpBlockSizeStored+6;
         check_exp += fread( &blockMeta, 6, 1, fd )*6;
 
@@ -374,14 +387,15 @@ int recover()
         void* ptr = Data[idx].ptr + offset;
         unsigned int chunkSize = ( (Data[idx].size-offset) < dcpBlockSizeStored ) ? Data[idx].size-offset : dcpBlockSizeStored; 
 
-        DBG_MSG(Exec.comm, "Data[0].id:%d, offset:%lu, chunksize: %lu", 0, Data[0].id, offset, chunkSize);
+        //DBG_MSG(Exec.comm, "Data[0].id:%d, offset:%lu, chunksize: %lu", 0, Data[0].id, offset, chunkSize);
         check_exp += chunkSize*fread( ptr, chunkSize, 1, fd );
         if( chunkSize < dcpBlockSizeStored ) {
             check_exp += (dcpBlockSizeStored-chunkSize)*fread( block, dcpBlockSizeStored-chunkSize, 1, fd );
         }
-        
+        unsigned long posOld = pos;
         pos += (dcpBlockSizeStored+6);
-        DBG_MSG( MPI_COMM_WORLD, "varId:%d blockId: %d, chunkSize:%lu, fileSize: %lu, pos: %lu",0, blockMeta.varId, blockMeta.blockId, chunkSize, Exec.dcp.dcpFileSize, pos );
+        //DBG_MSG(Exec.comm, "pos (delta: %lu): %lu", 0, pos-posOld, pos );
+        //DBG_MSG( MPI_COMM_WORLD, "varId:%d blockId: %d, chunkSize:%lu, fileSize: %lu, pos: %lu",0, blockMeta.varId, blockMeta.blockId, chunkSize, Exec.dcp.dcpFileSize, pos );
     }
 
     fclose(fd);
