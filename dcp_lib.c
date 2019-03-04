@@ -8,7 +8,7 @@ static dataInfo Data[BUFF];
 static confInfo Conf;
 static execInfo Exec;
 
-inline static int getIdx( int varId )
+int getIdx( int varId, dataInfo *Data )
 {
     int i=0;
     for(; i<Exec.nbVar; i++) {
@@ -73,20 +73,23 @@ int protect( int id, void* ptr, size_t nElem, size_t elemSize )
         ERR_MSG( Exec.comm, "invalid ID '%d'. ID's have to be positive.", Exec.commRank, id );
         return NSCS;
     }
-    
+   
+    bool update = false;
     int i;
     for( i=0; i<Exec.nbVar; i++) {
         if( id == Data[i].id ) {
-            ERR_MSG( Exec.comm, "ID '%d' already taken.", Exec.commRank, id );
-            return NSCS;
+            DBG_MSG( Exec.comm, "variable id '%d' will be updated.", Exec.commRank, id );
+            update = true;
         }
     }
     
     Data[Exec.nbVar].elemSize = elemSize;
     Data[Exec.nbVar].id = id;    
     Data[Exec.nbVar].nElem = nElem;
-    Data[Exec.nbVar].hashDataSize = 0;
-    Data[Exec.nbVar].hashArray = NULL;
+    if( !update ) {
+        Data[Exec.nbVar].hashDataSize = 0;
+        Data[Exec.nbVar].hashArray = NULL;
+    }
     Data[Exec.nbVar].ptr = ptr;
     Data[Exec.nbVar].size = elemSize*nElem;
 
@@ -102,7 +105,10 @@ int checkpoint( int id )
         return NSCS;
     }
     
+    // dcpFileId increments every dcpStackSize checkpoints.
     int dcpFileId = Exec.dcp.dcpCounter / Conf.dcpStackSize;
+
+    // dcpLayer corresponds to the additional layers towards the base layer.
     int dcpLayer = Exec.dcp.dcpCounter % Conf.dcpStackSize;
     
     char fn[BUFF], mfn[BUFF], mfnt[BUFF];
@@ -127,8 +133,7 @@ int checkpoint( int id )
 
     unsigned char * block = (unsigned char*) malloc( Conf.dcpBlockSize );
     int i = 0;
-    // init commitBlock. Commit all blocks to file for dcpLayer==0 (base layer).
-    // bool commitBlock = !((bool)dcpLayer); // true for dcpLayer==0
+    
     size_t dcpSize = 0;
     unsigned long glbDataSize = 0;
     if( dcpLayer == 0 ) Exec.dcp.dcpFileSize = 0;
@@ -180,11 +185,13 @@ int checkpoint( int id )
             // hash index
             unsigned int blockId = pos/Conf.dcpBlockSize;
             unsigned int hashIdx = blockId*Conf.digestWidth;
+            unsigned int intIdx = pos/sizeof(int);
             
             blockMeta.blockId = blockId;
 
             unsigned int chunkSize = ( (dataSize-pos) < Conf.dcpBlockSize ) ? dataSize-pos : Conf.dcpBlockSize;
-            
+           
+            // compute hashes
             if( chunkSize < Conf.dcpBlockSize ) {
                 // if block smaller pad with zeros
                 memset( block, 0x0, Conf.dcpBlockSize );
@@ -197,12 +204,15 @@ int checkpoint( int id )
                 }
             } else {
                 Conf.hashFunc( ptr, Conf.dcpBlockSize, &Data[i].hashArrayTmp[hashIdx] );
+                char hashstring[Conf.digestWidth*2+1];
+                //if(i==1)DBG_MSG(Exec.comm, "ptr: %p, hash: %s", 0, ptr, hashHex(&Data[i].hashArrayTmp[hashIdx], Conf.digestWidth, hashstring));
             }
             
             bool commitBlock;
             // if old hash exists, compare. If datasize increased, there wont be an old hash to compare with.
             if( pos < Data[i].hashDataSize ) {
                 commitBlock = memcmp( &Data[i].hashArray[hashIdx], &Data[i].hashArrayTmp[hashIdx], Conf.digestWidth );
+                //if(i==1) DBG_MSG(Exec.comm, "hash compare, commitBlock:%d, Data[%d]:%d", 0, commitBlock, intIdx, ((int*)Data[i].ptr)[intIdx] );
             } else {
                 commitBlock = true;
             }
@@ -222,17 +232,17 @@ int checkpoint( int id )
                 Exec.dcp.dcpFileSize += success*fileUpdate;
             }
             
-            ptr = Data[i].ptr + chunkSize*success;
             pos += chunkSize*success;
+            ptr = Data[i].ptr + pos; //chunkSize*success;
            
         }
 
+        // swap hash arrays and free old one
         free(Data[i].hashArray);
         Data[i].hashDataSize = dataSize;
         Data[i].hashArray = Data[i].hashArrayTmp;
 
     }
-    
 
     free(block);
         
@@ -284,6 +294,7 @@ int checkpoint( int id )
 
 int recover()
 {
+    int ii;
     int dcpFileId;
     unsigned long glbDataSize;
     unsigned long dcpBlockSizeStored;
@@ -301,7 +312,7 @@ int recover()
     for(i=0; i<Exec.nbVar; i++) {
         unsigned int varId;
         fread( &varId, sizeof(int), 1, mfd );
-        int idx = getIdx( varId );
+        int idx = getIdx( varId, Data );
         if( idx < 0 ) {
             ERR_MSG( Exec.comm, "id '%d' does not exist!", Exec.commRank, varId );
             return NSCS;
@@ -326,28 +337,33 @@ int recover()
         unsigned int varId;
         unsigned long locDataSize;
         fread( &varId, sizeof(int), 1, fd );
-        DBG_MSG(Exec.comm,"varId:%d",0,varId);
         fread( &locDataSize, sizeof(unsigned long), 1, fd );
-        int idx = getIdx(varId);
+        int idx = getIdx(varId, Data);
         if( idx < 0 ) {
             ERR_MSG( Exec.comm, "id '%d' does not exist!", Exec.commRank, varId );
             return NSCS;
         }
         fread( Data[idx].ptr, locDataSize, 1, fd );
     }
-
-    unsigned long pos = ftell( fd );
     
-    DBG_MSG( MPI_COMM_WORLD, "pos:%lu"            ,0, pos );
+    unsigned long pos = ftell( fd );
     
     unsigned long offset;
 
     blockMetaInfo_t blockMeta;
     unsigned char *block = (unsigned char*) malloc( dcpBlockSizeStored );
 
+    DBG_MSG(Exec.comm,"pos:%lu",0,pos);
+    unsigned long check = pos;
+    unsigned long check_exp = pos;
     while( pos < Exec.dcp.dcpFileSize ) {
-        fread( &blockMeta, 6, 1, fd );
-        int idx = getIdx(blockMeta.varId);
+        
+        DBG_MSG(Exec.comm,"pos:%lu, check:%lu, exp: %lu",0,pos, check, check_exp);
+        check += dcpBlockSizeStored+6;
+        check_exp += fread( &blockMeta, 6, 1, fd )*6;
+
+
+        int idx = getIdx(blockMeta.varId, Data);
         if( idx < 0 ) {
             ERR_MSG( Exec.comm, "id '%d' does not exist!", Exec.commRank, blockMeta.varId );
             return NSCS;
@@ -355,12 +371,13 @@ int recover()
         
         
         offset = blockMeta.blockId * dcpBlockSizeStored;
-        void* ptr = &Data[idx] + offset;
+        void* ptr = Data[idx].ptr + offset;
         unsigned int chunkSize = ( (Data[idx].size-offset) < dcpBlockSizeStored ) ? Data[idx].size-offset : dcpBlockSizeStored; 
 
-        fread( ptr, chunkSize, 1, fd );
+        DBG_MSG(Exec.comm, "Data[0].id:%d, offset:%lu, chunksize: %lu", 0, Data[0].id, offset, chunkSize);
+        check_exp += chunkSize*fread( ptr, chunkSize, 1, fd );
         if( chunkSize < dcpBlockSizeStored ) {
-            fread( block, dcpBlockSizeStored-chunkSize, 1, fd );
+            check_exp += (dcpBlockSizeStored-chunkSize)*fread( block, dcpBlockSizeStored-chunkSize, 1, fd );
         }
         
         pos += (dcpBlockSizeStored+6);

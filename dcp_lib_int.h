@@ -86,7 +86,7 @@ typedef struct confInfo
 typedef struct dcpInfo
 {
     int dcpCounter;
-    size_t dcpFileSize;
+    unsigned long dcpFileSize;
 } dcpInfo;
 
 typedef struct execInfo
