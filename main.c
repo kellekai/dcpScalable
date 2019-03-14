@@ -31,7 +31,25 @@ int main() {
 
     protect( 1, data, nelems, sizeof(int) );
     checkpoint( 0 ); // layer 0 
+    
+    // increase size
+    unsigned long nelems_old = nelems;
+    nelems += SIZE_IN_BLOCKS(256);
+    size = nelems * sizeof(int);
+    data = (int*) realloc( data, size );
+    for(i=nelems_old; i<nelems; i++) {
+        data[i] = i+1;
+    }
+    protect( 1, data, nelems, sizeof(int) );
+    
     checkpoint( 1 );
+    
+    // decrease size
+    nelems -= SIZE_IN_BLOCKS(256);
+    size = nelems * sizeof(int);
+    data = (int*) realloc( data, size );
+    protect( 1, data, nelems, sizeof(int) );
+    
     checkpoint( 2 );
     checkpoint( 3 );
     checkpoint( 4 );

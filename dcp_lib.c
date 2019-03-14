@@ -80,20 +80,22 @@ int protect( int id, void* ptr, size_t nElem, size_t elemSize )
         if( id == Data[i].id ) {
             //DBG_MSG( Exec.comm, "variable id '%d' will be updated.", Exec.commRank, id );
             update = true;
+            break;
         }
     }
     
-    Data[Exec.nbVar].elemSize = elemSize;
-    Data[Exec.nbVar].id = id;    
-    Data[Exec.nbVar].nElem = nElem;
-    if( !update ) {
-        Data[Exec.nbVar].hashDataSize = 0;
-        Data[Exec.nbVar].hashArray = NULL;
-    }
-    Data[Exec.nbVar].ptr = ptr;
-    Data[Exec.nbVar].size = elemSize*nElem;
+    Data[i].elemSize = elemSize;
+    Data[i].id = id;    
+    Data[i].nElem = nElem;
+    Data[i].ptr = ptr;
+    Data[i].size = elemSize*nElem;
 
-    Exec.nbVar++;
+    DBG_MSG(Exec.comm, "id: %d, size: %lu, ptr: %p", 0, id, elemSize*nElem, ptr);
+    if( !update ) {
+        Data[i].hashDataSize = 0;
+        Data[i].hashArray = NULL;
+        Exec.nbVar++;
+    }
     
     return SCES;
 }
